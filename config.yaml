@@ -1,86 +1,137 @@
-description: ""  # One sentence — shown in KFP Pipelines + KFP Experiments + MLflow Experiments UI
+description: "Ranks candidate LLMs on the 3 multi-agent-ai-trader agent tasks (analyst universe, dealer signal, option pick) — deterministic gates + LLM-judge → leaderboard"
 
 # ── Candidate models ─────────────────────────────────────────────────────────
 # One entry per model under evaluation. `id` is the leaderboard key and must be
 # unique. `ollama_tag` is required for serving_mode "ollama"; `hf_id` + `quant`
-# are required for serving_mode "guided" (vLLM). List only the fields the modes
-# you enable actually need.
+# are required for serving_mode "guided" (vLLM) — not needed while serving_modes
+# is [ollama].
+#
+# First run: the 3 models confirmed resident on the shared DGX Ollama
+# (192.168.1.200:11434). qwen3.6:35b-a3b is the incumbent whose failures
+# (hallucinated tickers, '' structured option pick, ungrounded rationales)
+# motivated this bakeoff — it is the baseline the others must beat.
+#
+# TODO(next pass): add Qwen3.8-27B once its Ollama tag + HF id are confirmed and
+# it is `ollama pull`ed (the plan's leading candidate; dense 27.8B).
 models:
-  - id: example-model
-    ollama_tag: "qwen3:4b"          # `ollama pull` target for serving_mode: ollama
-    hf_id: "Qwen/Qwen3-4B"          # HF repo for serving_mode: guided (vLLM)
-    quant: "fp8"                    # vLLM --quantization (fp8 on GB10 — never nvfp4)
+  - id: qwen3.6-35b-a3b
+    ollama_tag: "qwen3.6:35b-a3b"      # baseline / incumbent
+  - id: gpt-oss-120b
+    ollama_tag: "gpt-oss:120b"          # NOTE: also the judge — self-grading bias on this row
+  - id: nemotron-3-super
+    ollama_tag: "nemotron-3-super:latest"
 
 # ── Serving modes ────────────────────────────────────────────────────────────
-# The matrix is models × serving_modes, run SERIALLY (one GPU, Ollama pins one
-# resident model at a time).
-#   ollama  — evict any other resident model, pull + preload the target, hit
-#             /v1 on the shared Ollama (JSON mode).
-#   guided  — stand up a short-lived vLLM Deployment with xgrammar guided
-#             decoding, poll /health, tear it down after the combo.
+# ollama only for the first run — a fast baseline leaderboard with no
+# vLLM/RBAC/HF-id friction. Add `guided` (transient vLLM, xgrammar, fp8 — never
+# nvfp4 on GB10) as a second pass once the harnesses are proven; that also needs
+# `hf_id` + `quant` on every model and `kubectl apply -f manifests/bakeoff-rbac.yaml`.
 serving_modes: [ollama]
 
 # ── Task harnesses ───────────────────────────────────────────────────────────
-# Module-name-style keys; each must have a matching entry in the notebook's
-# HARNESSES registry (build_cases / run_case / gates / judge_prompt). The
-# template ships `example_harness` only — add your own in the notebook.
-tasks: [example_harness]
+# Each has a matching notebook cell (copied from example_harness) registered in
+# the notebook's _HARNESSES map.
+tasks: [analyst_universe, dealer_signal, option_pick]
 
 # ── Frozen dataset (MinIO artifact) ──────────────────────────────────────────
 # load_dataset pulls s3://<bucket>/datasets/<version>/{<task>.jsonl, manifest.json}.
-# Produce it with scripts/export_dataset.py (LangSmith → JSONL → MinIO).
+# v20260828 was frozen from multi-agent-ai-trader LangSmith traces (Task 0):
+#   analyst_universe 7 · dealer_signal 60 · option_pick 33
+#   (all 33 option_pick references are null — that IS the '' regression; 14/33
+#    carry get_option_chain fixtures for offline replay).
 dataset:
   s3_endpoint_url: "http://minio.mlflow-system.svc.cluster.local:9000"
-  bucket: "agent-model-bakeoff"       # export_dataset.py creates it if missing
-  version: "v00000000"             # dated snapshot dir, e.g. v20260828
-  # MinIO creds — the miramar-platform dev defaults (see the platform repo's
-  # dgx/k3s/mlflow/integrate-mlflow.sh). Override in the deploy workflow if your
-  # MinIO uses different credentials.
+  bucket: "agent-model-bakeoff"
+  version: "v20260828"
   access_key: "mlflowadmin"
   secret_key: "mlflowadmin12345678"
 
 # ── LLM-as-judge ─────────────────────────────────────────────────────────────
-# A single fixed judge model scores every candidate's output. Keep it local
-# (Ollama) by default. Note self-grading bias if the judge is also a candidate.
+# Fixed local judge. gpt-oss:120b is also a candidate — the report notes the
+# self-grading row; consider excluding it or adding a second judge later.
 judge:
   model: "gpt-oss:120b"
   base_url: "http://192.168.1.200:11434/v1"
 
 # ── Gate thresholds ──────────────────────────────────────────────────────────
-# Harness-specific keys, read by each harness's gates() block. Deterministic,
-# pass/fail — no model in the loop.
+# Read by each harness's gates() block. Deterministic pass/fail, no model.
+# Structural gates (pick ∈ candidate_list, action ∈ {BUY,SELL,HOLD}, schema-valid,
+# structured-pick-not-empty, loop ≤ max_rounds) are enforced in the harness code
+# itself; only the tunable numbers live here.
 gate_thresholds:
-  example_harness:
-    min_output_keys: 1
+  analyst_universe:
+    min_universe: 8          # a pick set below this = the universe collapsed toward
+                             # the mega-cap fallback (qwen3.6's observed failure mode).
+                             # trader analyst.max_universe_size is 10.
+  dealer_signal:
+    hold_rate_min: 0.05      # aggregate sanity band on the fraction of HOLD signals
+    hold_rate_max: 0.95      # across the slice — not ~0% (reckless) or ~100% (inert)
+  option_pick:
+    dte_min: 14              # from multi-agent-ai-trader options_trading.dte_min
+    dte_max: 45              # .dte_max
+    delta_min: 0.30          # .target_delta_min  (|delta| window)
+    delta_max: 0.60          # .target_delta_max
+    max_rounds: 6            # _MAX_TOOL_CALL_ROUNDS in src/dealer/graph.py
 
 # ── Score weights ────────────────────────────────────────────────────────────
-# Per task, per metric. Weights are normalized per task before the weighted
-# composite. `gate_pass` = fraction of cases passing all gates; `judge` = mean
-# judge score normalized to 0–1.
+# Per task, per metric; normalized per task before the weighted composite.
+# gate_pass = fraction of cases passing all gates; judge = mean judge score → 0–1.
+# Gate-heavy: these are constrained structured tasks where a hard failure
+# (wrong-list pick, empty JSON, fallback contract) matters more than prose quality.
 score_weights:
-  example_harness:
+  analyst_universe:
     gate_pass: 0.6
     judge: 0.4
+  dealer_signal:
+    gate_pass: 0.6
+    judge: 0.4
+  option_pick:
+    gate_pass: 0.7
+    judge: 0.3
 
 # ── Timeouts / serving knobs ─────────────────────────────────────────────────
-case_timeout_s: 180               # hard cap per run_case (bounds every agentic loop)
+# option_pick is the long pole: up to 6 tool-call rounds, each an LLM call that
+# can take ~60–120s on a big Ollama model. 600s bounds the whole loop per case
+# (GB10 silent-hang lesson — every agentic loop MUST be bounded).
+case_timeout_s: 600
 serving:
   ollama_base_url: "http://192.168.1.200:11434/v1"
-  ollama_pull_timeout_s: 1800     # max wait for `ollama pull` of a cold model
-  guided_readiness_timeout_s: 900 # max wait for a vLLM pod /health to go green
-  guided_namespace: "kubeflow"    # namespace the transient vLLM Deployment lands in
+  ollama_pull_timeout_s: 1800
+  guided_readiness_timeout_s: 900
+  guided_namespace: "kubeflow"
   vllm_image: "vllm/vllm-openai:latest"
   vllm_max_model_len: 8192
 
 # ── LangSmith (dataset source) ───────────────────────────────────────────────
-# scripts/export_dataset.py reads one `export` spec per task from `project`,
-# writes ./dataset/<task>.jsonl + manifest.json, and uploads to
+# scripts/export_dataset.py reads one `export` spec per task, writes
+# ./dataset/<task>.jsonl + manifest.json, uploads to
 # s3://<dataset.bucket>/datasets/<version>/. Needs LANGCHAIN_API_KEY in env.
+#
+# NOTE: the skip_where / drop_input_keys / collect_child_tools keys below require
+# the export_dataset.py enhancements in miramar-platform-gcp PR #60. v20260828 is
+# already frozen; these specs are here for the v20260904 re-export (after
+# multi-agent-ai-trader#20 bumps sampling_rate to 1.0 for ~a week).
 langsmith:
-  project: ""                     # LangSmith project name
+  project: "multi-agent-ai-trader"
   export:
-    - task: example_harness
-      run_filter: ""              # LangSmith filter DSL, e.g. eq(name, "analyst_universe")
-      limit: 50
-      input_path: "inputs"        # dotted path into the run for the case inputs
-      output_path: "outputs"      # dotted path into the run for the reference output
+    - task: analyst_universe
+      run_filter: 'eq(name, "llm_select")'
+      limit: 100
+      input_path: "inputs"
+      output_path: "outputs.selection"
+      drop_input_keys: [selection]
+    - task: dealer_signal
+      run_filter: 'eq(name, "llm_call")'
+      limit: 100
+      input_path: "inputs"
+      output_path: "outputs.signal"
+      drop_input_keys: [signal, option_pick, execution_result]
+    - task: option_pick
+      run_filter: 'eq(name, "select_option_contract")'
+      limit: 100
+      input_path: "inputs"
+      output_path: "outputs.option_pick"
+      drop_input_keys: [option_pick, execution_result]
+      skip_where:
+        - {path: "inputs.signal.action", equals: "HOLD"}
+      collect_child_tools: [get_option_chain, get_option_snapshot, get_option_contracts]
