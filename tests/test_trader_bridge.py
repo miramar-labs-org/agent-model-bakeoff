@@ -50,11 +50,11 @@ def test_fixture_text_tolerates_bare_string_and_non_json():
 def test_as_date_parses_iso_and_passes_date_through():
     import datetime as dt
 
-    assert tb._as_date("2026-09-11") == dt.date(2026, 9, 11)
-    assert tb._as_date("2026-09-11T00:00:00Z") == dt.date(2026, 9, 11)
-    assert tb._as_date(dt.date(2026, 9, 11)) == dt.date(2026, 9, 11)
-    assert tb._as_date("garbage") is None
-    assert tb._as_date(None) is None
+    assert tb._tb_parse_date("2026-09-11") == dt.date(2026, 9, 11)
+    assert tb._tb_parse_date("2026-09-11T00:00:00Z") == dt.date(2026, 9, 11)
+    assert tb._tb_parse_date(dt.date(2026, 9, 11)) == dt.date(2026, 9, 11)
+    assert tb._tb_parse_date("garbage") is None
+    assert tb._tb_parse_date(None) is None
 
 
 def test_freeze_datetime_pins_now_to_reference_date():

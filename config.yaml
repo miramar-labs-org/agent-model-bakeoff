@@ -62,7 +62,8 @@ gate_thresholds:
   analyst_universe:
     min_universe: 8          # a pick set below this = the universe collapsed toward
                              # the mega-cap fallback (qwen3.6's observed failure mode).
-                             # trader analyst.max_universe_size is 10.
+    max_universe: 10         # trader analyst.max_universe_size — a pick above this
+                             # means the model blew past the cap.
   dealer_signal:
     hold_rate_min: 0.05      # aggregate sanity band on the fraction of HOLD signals
     hold_rate_max: 0.95      # across the slice — not ~0% (reckless) or ~100% (inert)

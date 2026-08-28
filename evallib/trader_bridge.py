@@ -264,7 +264,7 @@ def _patched_option_loop(fixture_tools: list, ref_date):
             setattr(g, name, value)
 
 
-def _as_date(value):
+def _tb_parse_date(value):
     if isinstance(value, _dt.date):
         return value
     try:
@@ -294,13 +294,13 @@ def run_option_pick_case(inputs: dict, fixtures: dict, cfg, *,
 
     fixture_tools = build_fixture_tools(fixtures)
 
-    ref = _as_date(reference_date)
+    ref = _tb_parse_date(reference_date)
     if ref is None:
         exps = []
         for entries in (fixtures or {}).values():
             for entry in entries or []:
                 for row in parse_option_chain(_fixture_text(entry)):
-                    d = _as_date(row.get("expiration"))
+                    d = _tb_parse_date(row.get("expiration"))
                     if d is not None:
                         exps.append(d)
         if exps:
