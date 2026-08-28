@@ -27,3 +27,10 @@ boto3
 mlflow
 pandas
 pyyaml
+
+# The real Analyst / Dealer entrypoints, installed as a pinned dependency so the
+# option_pick / dealer_signal / analyst_universe harnesses run the production
+# code rather than re-implementing it. Pinned to the multi-agent-ai-trader#21
+# squash commit (adds pyproject.toml; top-level import package is `src`).
+# The KFP component images install this same spec via `packages_to_install`.
+multi-agent-ai-trader @ git+https://github.com/miramar-labs-org/multi-agent-ai-trader.git@174e86b6342d6f7b91e4895c5b4ccc9fe91464b7
