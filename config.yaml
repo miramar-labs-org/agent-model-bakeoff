@@ -47,11 +47,13 @@ dataset:
   secret_key: "mlflowadmin12345678"
 
 # ── LLM-as-judge ─────────────────────────────────────────────────────────────
-# Fixed local judge. gpt-oss:120b is also a candidate — the report notes the
-# self-grading row; consider excluding it or adding a second judge later.
+# The shared platform judge. phi4 on the AGX Orin, same model and endpoint as
+# every other judge-bearing project, so scores are comparable across projects.
+# It is deliberately not one of the candidates above — the old gpt-oss:120b
+# judge was, which is what produced the report's self-grading row.
 judge:
-  model: "gpt-oss:120b"
-  base_url: "http://192.168.1.200:11434/v1"
+  model: "phi4"                             # platform judge (AGX_DEFAULT_MODEL)
+  base_url: "http://192.168.1.202:11434/v1" # AGX Orin (AGX_HOST_IP) — the judge always runs here
 
 # ── Gate thresholds ──────────────────────────────────────────────────────────
 # Read by each harness's gates() block. Deterministic pass/fail, no model.
